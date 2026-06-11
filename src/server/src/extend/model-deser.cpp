@@ -1043,6 +1043,54 @@ struct FormModelWire {
   std::vector<FormChild> children;
 };
 
+// Xcode 26/libc++ instantiates std::variant ordering while Glaze decodes tagged unions.
+// These wire structs only need ordering to be well-formed for that machinery; parsing
+// and conversion never rely on a semantic order here.
+#define VICINAE_WIRE_LESS(Type)                                                                              \
+  static bool operator<(const Type &, const Type &) noexcept { return false; }
+VICINAE_WIRE_LESS(ImageSourceWire)
+VICINAE_WIRE_LESS(ImageObjectWire)
+VICINAE_WIRE_LESS(FlexTextObj)
+VICINAE_WIRE_LESS(FlexStringObj)
+VICINAE_WIRE_LESS(GridContentObjWire)
+VICINAE_WIRE_LESS(ImageWrappedObjWire)
+VICINAE_WIRE_LESS(ShortcutObjWire)
+VICINAE_WIRE_LESS(ActionModelWire)
+VICINAE_WIRE_LESS(ActionPannelSectionModelWire)
+VICINAE_WIRE_LESS(ActionPannelSubmenuModelWire)
+VICINAE_WIRE_LESS(ActionPannelItemWire)
+VICINAE_WIRE_LESS(ActionPannelModelWire)
+VICINAE_WIRE_LESS(DropdownItemWire)
+VICINAE_WIRE_LESS(DropdownSectionWire)
+VICINAE_WIRE_LESS(DropdownModelWire)
+VICINAE_WIRE_LESS(TagListWire)
+VICINAE_WIRE_LESS(MetadataLabelWire)
+VICINAE_WIRE_LESS(MetadataLink)
+VICINAE_WIRE_LESS(MetadataSeparator)
+VICINAE_WIRE_LESS(MetadataModelWire)
+VICINAE_WIRE_LESS(DetailModelWire)
+VICINAE_WIRE_LESS(EmptyViewModelWire)
+VICINAE_WIRE_LESS(ListItemViewModelWire)
+VICINAE_WIRE_LESS(ListSectionModelWire)
+VICINAE_WIRE_LESS(ListModelWire)
+VICINAE_WIRE_LESS(GridItemViewModelWire)
+VICINAE_WIRE_LESS(GridSectionModelWire)
+VICINAE_WIRE_LESS(GridModelWire)
+VICINAE_WIRE_LESS(RootDetailModelWire)
+VICINAE_WIRE_LESS(FormTextFieldWire)
+VICINAE_WIRE_LESS(FormPasswordFieldWire)
+VICINAE_WIRE_LESS(FormCheckboxFieldWire)
+VICINAE_WIRE_LESS(FormDropdownFieldWire)
+VICINAE_WIRE_LESS(FormTextAreaFieldWire)
+VICINAE_WIRE_LESS(FormFilePickerFieldWire)
+VICINAE_WIRE_LESS(FormDatePickerFieldWire)
+VICINAE_WIRE_LESS(FormSeparatorWire)
+VICINAE_WIRE_LESS(FormDescriptionWire)
+VICINAE_WIRE_LESS(FormLinkAccessoryWire)
+VICINAE_WIRE_LESS(FormTagPickerFieldWire)
+VICINAE_WIRE_LESS(FormModelWire)
+#undef VICINAE_WIRE_LESS
+
 static FormModel toFormModel(FormModelWire &w) {
   FormModel m;
   m.isLoading = w.isLoading;

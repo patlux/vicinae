@@ -688,6 +688,9 @@ list(APPEND SRCS
 
 if (TYPESCRIPT_EXTENSIONS)
 	list(APPEND SRCS ${CMAKE_CURRENT_BINARY_DIR}/resources.qrc)
+else()
+	file(WRITE ${CMAKE_BINARY_DIR}/extension-runtime.js "")
+	list(APPEND SRCS ${CMAKE_CURRENT_BINARY_DIR}/resources.qrc)
 endif()
 
 if (UNIX AND NOT APPLE)
