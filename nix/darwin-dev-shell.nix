@@ -47,9 +47,17 @@
   configure = pkgs.writeShellScriptBin "vicinae-configure" ''
     set -euo pipefail
     build_dir="''${VICINAE_BUILD_DIR:-build}"
+    unset DEVELOPER_DIR SDKROOT
+    sdkroot="$(/usr/bin/xcrun --sdk macosx --show-sdk-path)"
+    swiftc="$(/usr/bin/xcrun --find swiftc)"
     cmake -S . -B "$build_dir" -G Ninja \
       -DCMAKE_BUILD_TYPE="''${CMAKE_BUILD_TYPE:-Release}" \
       -DCMAKE_OSX_DEPLOYMENT_TARGET=14.4 \
+      -DCMAKE_OSX_SYSROOT="$sdkroot" \
+      -DCMAKE_Swift_COMPILER="$swiftc" \
+      -DCMAKE_CXX_FLAGS="-I${pkgs.libqalculate.dev}/include -I${pkgs.gmp.dev}/include -I${pkgs.mpfr.dev}/include -I${pkgs.kdePackages.qtkeychain}/include" \
+      -DCMAKE_EXE_LINKER_FLAGS="-L${pkgs.libqalculate}/lib -L${pkgs.gmp.out}/lib -L${pkgs.mpfr.out}/lib -L${pkgs.kdePackages.qtkeychain}/lib" \
+      -DCMAKE_SHARED_LINKER_FLAGS="-L${pkgs.libqalculate}/lib -L${pkgs.gmp.out}/lib -L${pkgs.mpfr.out}/lib -L${pkgs.kdePackages.qtkeychain}/lib" \
       -DCMAKE_PREFIX_PATH="''${CMAKE_PREFIX_PATH}" \
       -DICU_ROOT="${pkgs.icu76}" \
       -DICU_INCLUDE_DIR="${pkgs.icu76.dev}/include" \
@@ -121,11 +129,14 @@ in
     OPENSSL_ROOT_DIR = pkgs.openssl;
 
     shellHook = ''
+      unset DEVELOPER_DIR SDKROOT
       export CC=/usr/bin/cc
       export CXX=/usr/bin/c++
       export CMAKE_C_COMPILER=$CC
       export CMAKE_CXX_COMPILER=$CXX
       export CMAKE_GENERATOR=Ninja
+      export CPATH="${pkgs.libqalculate.dev}/include:${pkgs.gmp.dev}/include:${pkgs.mpfr.dev}/include:${pkgs.kdePackages.qtkeychain}/include''${CPATH:+:$CPATH}"
+      export LIBRARY_PATH="${pkgs.libqalculate}/lib:${pkgs.gmp.out}/lib:${pkgs.mpfr.out}/lib:${pkgs.kdePackages.qtkeychain}/lib''${LIBRARY_PATH:+:$LIBRARY_PATH}"
       export VICINAE_BUILD_DIR=''${VICINAE_BUILD_DIR:-build}
 
       echo "Vicinae macOS dev shell"
