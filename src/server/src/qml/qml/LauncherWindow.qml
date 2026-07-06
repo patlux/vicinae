@@ -205,7 +205,6 @@ Window {
             id: actionPanelPopover
             parent: footer
             controller: actionPanel
-            maxHeight: Math.round(root.height * 0.6)
         }
 
         ActionPanelPopover {
@@ -213,7 +212,6 @@ Window {
             parent: footer
             controller: footerPanel
             alignLeft: true
-            maxHeight: Math.round(root.height * 0.6)
         }
 
         MouseArea {
