@@ -7,6 +7,10 @@ FocusRestoringScope {
 
     required property var controller
     property bool alignLeft: false
+    property int maxHeight: 400
+
+    width: parent ? parent.width : 0
+    height: parent ? parent.height : 0
 
     active: root.controller.open
     visible: root.controller.open || panel.opacity > 0
@@ -29,10 +33,9 @@ FocusRestoringScope {
     Item {
         id: panel
         x: root.alignLeft ? 10 : parent.width - width - 10
-        anchors.bottom: parent.bottom
-        anchors.bottomMargin: 10
+        y: -height - 10
         width: 400
-        height: Math.min(stack.currentItem ? stack.currentItem.implicitHeight + 2 : 300, root.height * 0.6)
+        height: Math.min(stack.currentItem ? stack.currentItem.implicitHeight + 2 : 300, root.maxHeight)
 
         opacity: 0
         scale: 0.95
