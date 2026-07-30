@@ -16,6 +16,7 @@ Item {
     readonly property int requestedHeight: blockData.height ?? 0
     readonly property string alt: blockData.alt ?? ""
     readonly property string link: blockData.link ?? ""
+    readonly property string internalTarget: blockData.alt?.startsWith("account:") ? blockData.alt.slice(8) : ""
 
     width: parent?.width ?? 0
     implicitHeight: col.implicitHeight
@@ -31,21 +32,24 @@ Item {
             Layout.preferredWidth: imgW
             Layout.preferredHeight: imgH
 
+            readonly property real fitScale: {
+                if (root.requestedWidth <= 0 || root.width <= 0)
+                    return 1;
+                return Math.min(1, root.width / root.requestedWidth);
+            }
             readonly property int imgW: {
                 if (root.requestedWidth > 0)
-                    return root.requestedWidth;
+                    return Math.round(root.requestedWidth * fitScale);
                 if (root.requestedHeight > 0)
                     return root.requestedHeight;
                 return root.width;
             }
-            readonly property int _rawH: {
-                if (root.requestedHeight > 0)
-                    return root.requestedHeight;
-                if (root.requestedWidth > 0)
-                    return root.requestedWidth;
-                return 200;
+            readonly property int imgH: {
+                if (root.requestedWidth > 0 && root.requestedHeight > 0)
+                    return Math.round(root.requestedHeight * fitScale);
+                const rawH = root.requestedHeight > 0 ? root.requestedHeight : root.requestedWidth > 0 ? root.requestedWidth : 200;
+                return root.maxImageHeight > 0 ? Math.min(rawH, 200, root.maxImageHeight) : Math.min(rawH, 200);
             }
-            readonly property int imgH: root.maxImageHeight > 0 ? Math.min(_rawH, 200, root.maxImageHeight) : Math.min(_rawH, 200)
 
             ViciImage {
                 anchors.fill: parent
@@ -59,11 +63,19 @@ Item {
                 opacity: 0.4
                 visible: root.selected
             }
+
+            MouseArea {
+                anchors.fill: parent
+                enabled: root.link.length > 0
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.mdModel?.openLink(root.link)
+            }
         }
 
         Text {
             Layout.alignment: Qt.AlignHCenter
-            visible: root.alt.length > 0
+            visible: root.alt.length > 0 && root.internalTarget.length === 0
             text: root.alt
             color: Theme.textMuted
             font.pointSize: Theme.smallerFontSize

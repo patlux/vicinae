@@ -20,6 +20,7 @@ enum class MdBlockType : int {
   HtmlBlock,
   Blockquote,
   Callout,
+  ImageRow,
 };
 
 class MarkdownModel : public QAbstractListModel {
@@ -28,6 +29,7 @@ class MarkdownModel : public QAbstractListModel {
 
 signals:
   void blocksAppended();
+  void internalLinkRequested(const QString &target);
 
 public:
   enum Role {

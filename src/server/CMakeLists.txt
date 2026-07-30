@@ -926,6 +926,7 @@ set(VICINAE_QML_FILES
 	src/qml/qml/markdown/MdList.qml
 	src/qml/qml/markdown/MdTable.qml
 	src/qml/qml/markdown/MdImage.qml
+	src/qml/qml/markdown/MdImageRow.qml
 	src/qml/qml/markdown/MdHorizontalRule.qml
 	src/qml/qml/markdown/MdHtmlBlock.qml
 	src/qml/qml/markdown/MdBlockquote.qml

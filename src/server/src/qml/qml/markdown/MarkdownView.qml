@@ -24,6 +24,38 @@ Item {
     function scrollDown() {
         flickable.flick(0, -800);
     }
+    function normalizeInternalTarget(value) {
+        const raw = String(value || "").trim();
+        if (!raw)
+            return "";
+        try {
+            return decodeURIComponent(raw);
+        } catch (error) {
+            return raw;
+        }
+    }
+    function scrollToInternalTarget(target) {
+        const wanted = normalizeInternalTarget(target);
+        if (!wanted)
+            return;
+
+        for (let i = 0; i < col.children.length; i++) {
+            const child = col.children[i];
+            const item = child?.item ?? child;
+            if (!item)
+                continue;
+
+            const candidate = normalizeInternalTarget(item.internalTarget || "");
+            if (!candidate || candidate !== wanted)
+                continue;
+
+            // Loader.y is relative to the ColumnLayout; map into flickable content space.
+            const mapped = item.mapToItem(flickable.contentItem, 0, 0);
+            const maxY = Math.max(0, flickable.contentHeight - flickable.height);
+            flickable.contentY = Math.max(0, Math.min(mapped.y - root.topPadding, maxY));
+            return;
+        }
+    }
 
     onFontFamilyChanged: flickable.contentY = 0
 
@@ -108,6 +140,7 @@ Item {
                     readonly property int htmlBlock: 8
                     readonly property int blockquote: 9
                     readonly property int callout: 10
+                    readonly property int imageRow: 11
 
                     sourceComponent: {
                         switch (blockType) {
@@ -133,6 +166,8 @@ Item {
                             return blockquoteComp;
                         case callout:
                             return calloutComp;
+                        case imageRow:
+                            return imageRowComp;
                         default:
                             return null;
                         }
@@ -142,7 +177,7 @@ Item {
                         item.selectionController = root._controller;
                         item.mdModel = root.model;
                         item.blockIndex = index;
-                        if (blockType !== codeBlock && blockType !== image && blockType !== horizontalRule)
+                        if (blockType !== codeBlock && blockType !== image && blockType !== horizontalRule && blockType !== imageRow)
                             item.fontFamily = Qt.binding(function () {
                                 return root.fontFamily;
                             });
@@ -150,7 +185,7 @@ Item {
                             item.ordered = true;
                         else if (blockType === bulletList)
                             item.ordered = false;
-                        if (blockType === image)
+                        if (blockType === image || blockType === imageRow)
                             item.maxImageHeight = Qt.binding(function () {
                                 return root.height * 0.7;
                             });
@@ -186,6 +221,10 @@ Item {
         Component {
             id: imageComp
             MdImage {}
+        }
+        Component {
+            id: imageRowComp
+            MdImageRow {}
         }
         Component {
             id: hrComp
@@ -300,6 +339,9 @@ Item {
 
     Connections {
         target: root.model
+        function onInternalLinkRequested(target) {
+            root.scrollToInternalTarget(target);
+        }
         function onBlocksAppended() {
             let atBottom = flickable.contentHeight <= flickable.height || flickable.contentY + flickable.height >= flickable.contentHeight - 2;
             root._autoScroll = atBottom;

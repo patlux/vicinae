@@ -63,6 +63,70 @@ struct InlineContext {
   const QString &monoFamily;
 };
 
+QString imageAltText(cmark_node *imageNode) {
+  QString alt;
+  for (auto *c = cmark_node_first_child(imageNode); c; c = cmark_node_next(c)) {
+    if (cmark_node_get_type(c) == CMARK_NODE_TEXT) {
+      auto *lit = cmark_node_get_literal(c);
+      if (lit) alt += QString::fromUtf8(lit);
+    }
+  }
+  return alt;
+}
+
+QVariantMap parseImageSize(const QUrl &url) {
+  QVariantMap data;
+  QUrlQuery query(url);
+
+  auto tryParam = [&](const std::vector<const char *> &names) -> int {
+    for (auto *name : names) {
+      auto val = query.queryItemValue(name);
+      if (!val.isEmpty()) return val.toInt();
+    }
+    return 0;
+  };
+
+  int const w = tryParam({"raycast-width", "omnicast-width"});
+  int const h = tryParam({"raycast-height", "omnicast-height"});
+  if (w > 0) data[QStringLiteral("width")] = w;
+  if (h > 0) data[QStringLiteral("height")] = h;
+  return data;
+}
+
+QVariantMap parseDataUriSvgSize(const QString &rawUrl) {
+  QVariantMap data;
+  if (!rawUrl.startsWith(QStringLiteral("data:image/svg+xml"))) return data;
+
+  const auto comma = rawUrl.indexOf(',');
+  if (comma < 0) return data;
+
+  QByteArray payload = rawUrl.mid(comma + 1).toUtf8();
+  if (rawUrl.left(comma).contains(QStringLiteral(";base64"), Qt::CaseInsensitive))
+    payload = QByteArray::fromBase64(payload);
+  else
+    payload = QByteArray::fromPercentEncoding(payload);
+
+  // Only trust attributes on the root <svg> tag. Nested logo/rect widths would
+  // otherwise collapse large account cards to tiny logo sizes.
+  static const QRegularExpression svgOpenRe(QStringLiteral(R"((?is)<svg\b([^>]*)>)"));
+  static const QRegularExpression attrRe(
+      QStringLiteral(R"((?i)\b(width|height)\s*=\s*["']?(\d+(?:\.\d+)?))"));
+  const auto open = svgOpenRe.match(QString::fromUtf8(payload));
+  if (!open.hasMatch()) return data;
+
+  auto it = attrRe.globalMatch(open.captured(1));
+  while (it.hasNext()) {
+    const auto match = it.next();
+    const int value = qRound(match.captured(2).toDouble());
+    if (value <= 0) continue;
+    if (match.captured(1).compare(QStringLiteral("width"), Qt::CaseInsensitive) == 0)
+      data[QStringLiteral("width")] = value;
+    else
+      data[QStringLiteral("height")] = value;
+  }
+  return data;
+}
+
 QString renderInlineHtml(cmark_node *node, const InlineContext &ctx);
 
 QString renderOneInline(cmark_node *cur, const InlineContext &ctx) {
@@ -102,17 +166,67 @@ QString renderOneInline(cmark_node *cur, const InlineContext &ctx) {
     result += QStringLiteral("</i>");
     break;
 
-  case CMARK_NODE_LINK:
-    result += QStringLiteral("<a href=\"%1\" style=\"color:%2;\">")
-                  .arg(QString::fromUtf8(cmark_node_get_url(cur)).toHtmlEscaped(), ctx.linkColor);
-    result += renderInlineHtml(cmark_node_first_child(cur), ctx);
+  case CMARK_NODE_LINK: {
+    auto const href = QString::fromUtf8(cmark_node_get_url(cur));
+    auto *child = cmark_node_first_child(cur);
+    if (child && !cmark_node_next(child) && cmark_node_get_type(child) == CMARK_NODE_IMAGE &&
+        href.startsWith('#')) {
+      auto const rawUrl = QString::fromUtf8(cmark_node_get_url(child));
+      // Qt RichText only understands normal image URLs (data:/http(s):/file:),
+      // not Vicinae's internal icon: scheme used by ViciImage.
+      auto const src = rawUrl;
+      auto const alt = imageAltText(child);
+      auto size = parseImageSize(QUrl(rawUrl));
+      if (!size.contains(QStringLiteral("width")) || !size.contains(QStringLiteral("height"))) {
+        auto svgSize = parseDataUriSvgSize(rawUrl);
+        if (!size.contains(QStringLiteral("width")) && svgSize.contains(QStringLiteral("width")))
+          size[QStringLiteral("width")] = svgSize.value(QStringLiteral("width"));
+        if (!size.contains(QStringLiteral("height")) && svgSize.contains(QStringLiteral("height")))
+          size[QStringLiteral("height")] = svgSize.value(QStringLiteral("height"));
+      }
+      // Compact account jump chips stay icon-sized and inline.
+      int const width = size.value(QStringLiteral("width"), 34).toInt();
+      int const height = size.value(QStringLiteral("height"), 34).toInt();
+      result += QStringLiteral("<a href=\"%1\" style=\"color:%2;text-decoration:none;\">"
+                               "<img src=\"%3\" alt=\"%4\" width=\"%5\" height=\"%6\"/>"
+                               "</a>&nbsp;")
+                    .arg(href.toHtmlEscaped(), ctx.linkColor, src.toHtmlEscaped(), alt.toHtmlEscaped())
+                    .arg(width)
+                    .arg(height);
+      break;
+    }
+
+    result += QStringLiteral("<a href=\"%1\" style=\"color:%2;\">").arg(href.toHtmlEscaped(), ctx.linkColor);
+    result += renderInlineHtml(child, ctx);
     result += QStringLiteral("</a>");
     break;
+  }
 
   case CMARK_NODE_IMAGE: {
-    auto src = imageProviderUrl(QString::fromUtf8(cmark_node_get_url(cur)));
-    auto alt = QString::fromUtf8(cmark_node_get_title(cur));
-    result += QStringLiteral("<img src=\"%1\" alt=\"%2\"/>").arg(src.toHtmlEscaped(), alt.toHtmlEscaped());
+    auto const rawUrl = QString::fromUtf8(cmark_node_get_url(cur));
+    // Keep data/http(s)/file URLs intact for RichText; convert only custom schemes.
+    auto const scheme = QUrl(rawUrl).scheme();
+    auto src = (scheme == QStringLiteral("data") || scheme == QStringLiteral("http") ||
+                scheme == QStringLiteral("https") || scheme == QStringLiteral("file") || scheme.isEmpty())
+                   ? rawUrl
+                   : imageProviderUrl(rawUrl);
+    auto alt = imageAltText(cur);
+    auto size = parseImageSize(QUrl(rawUrl));
+    if (!size.contains(QStringLiteral("width")) || !size.contains(QStringLiteral("height"))) {
+      auto svgSize = parseDataUriSvgSize(rawUrl);
+      if (!size.contains(QStringLiteral("width")) && svgSize.contains(QStringLiteral("width")))
+        size[QStringLiteral("width")] = svgSize.value(QStringLiteral("width"));
+      if (!size.contains(QStringLiteral("height")) && svgSize.contains(QStringLiteral("height")))
+        size[QStringLiteral("height")] = svgSize.value(QStringLiteral("height"));
+    }
+    if (size.contains(QStringLiteral("width")) && size.contains(QStringLiteral("height"))) {
+      result += QStringLiteral("<img src=\"%1\" alt=\"%2\" width=\"%3\" height=\"%4\"/>")
+                    .arg(src.toHtmlEscaped(), alt.toHtmlEscaped())
+                    .arg(size.value(QStringLiteral("width")).toInt())
+                    .arg(size.value(QStringLiteral("height")).toInt());
+    } else {
+      result += QStringLiteral("<img src=\"%1\" alt=\"%2\"/>").arg(src.toHtmlEscaped(), alt.toHtmlEscaped());
+    }
     break;
   }
 
@@ -143,17 +257,6 @@ QString renderInlineHtml(cmark_node *node, const InlineContext &ctx) {
 
 QString renderInlineChildren(cmark_node *parent, const InlineContext &ctx) {
   return renderInlineHtml(cmark_node_first_child(parent), ctx);
-}
-
-QString imageAltText(cmark_node *imageNode) {
-  QString alt;
-  for (auto *c = cmark_node_first_child(imageNode); c; c = cmark_node_next(c)) {
-    if (cmark_node_get_type(c) == CMARK_NODE_TEXT) {
-      auto *lit = cmark_node_get_literal(c);
-      if (lit) alt += QString::fromUtf8(lit);
-    }
-  }
-  return alt;
 }
 
 QVariantMap buildListItem(cmark_node *itemNode, const InlineContext &ctx);
@@ -198,29 +301,18 @@ void collectCellHtml(cmark_node *firstCell, int columnCount, QVariantList &out, 
   }
 }
 
-QVariantMap parseImageSize(const QUrl &url) {
-  QVariantMap data;
-  QUrlQuery query(url);
-
-  auto tryParam = [&](const std::vector<const char *> &names) -> int {
-    for (auto *name : names) {
-      auto val = query.queryItemValue(name);
-      if (!val.isEmpty()) return val.toInt();
-    }
-    return 0;
-  };
-
-  int const w = tryParam({"raycast-width", "omnicast-width"});
-  int const h = tryParam({"raycast-height", "omnicast-height"});
-  if (w > 0) data[QStringLiteral("width")] = w;
-  if (h > 0) data[QStringLiteral("height")] = h;
-  return data;
-}
-
 QVariantMap buildImageBlock(cmark_node *imageNode) {
-  QUrl const imgUrl(QString::fromUtf8(cmark_node_get_url(imageNode)));
+  QString const rawUrl = QString::fromUtf8(cmark_node_get_url(imageNode));
+  QUrl const imgUrl(rawUrl);
   QVariantMap data = parseImageSize(imgUrl);
-  data[QStringLiteral("src")] = imageProviderUrl(imgUrl.toString());
+  if (!data.contains(QStringLiteral("width")) || !data.contains(QStringLiteral("height"))) {
+    auto svgSize = parseDataUriSvgSize(rawUrl);
+    if (!data.contains(QStringLiteral("width")) && svgSize.contains(QStringLiteral("width")))
+      data[QStringLiteral("width")] = svgSize.value(QStringLiteral("width"));
+    if (!data.contains(QStringLiteral("height")) && svgSize.contains(QStringLiteral("height")))
+      data[QStringLiteral("height")] = svgSize.value(QStringLiteral("height"));
+  }
+  data[QStringLiteral("src")] = imageProviderUrl(rawUrl);
   data[QStringLiteral("alt")] = imageAltText(imageNode);
   return data;
 }
@@ -235,6 +327,7 @@ void processHtmlNodes(pugi::xml_node node, HtmlBlockResult &result) {
     if (cur.type() == pugi::node_element) {
       if (std::strcmp(cur.name(), "img") == 0) {
         QString src;
+        QString alt;
         int w = 0, h = 0;
         for (auto attr = cur.first_attribute(); attr; attr = attr.next_attribute()) {
           QString const name = QString::fromUtf8(attr.name()).toLower();
@@ -242,6 +335,8 @@ void processHtmlNodes(pugi::xml_node node, HtmlBlockResult &result) {
 
           if (name == "src") {
             src = value;
+          } else if (name == "alt") {
+            alt = value;
           } else if (name == "width") {
             w = value.toInt();
           } else if (name == "height") {
@@ -261,9 +356,16 @@ void processHtmlNodes(pugi::xml_node node, HtmlBlockResult &result) {
           }
         }
         if (!src.isEmpty()) {
+          if (w <= 0 || h <= 0) {
+            auto svgSize = parseDataUriSvgSize(src);
+            if (w <= 0 && svgSize.contains(QStringLiteral("width")))
+              w = svgSize.value(QStringLiteral("width")).toInt();
+            if (h <= 0 && svgSize.contains(QStringLiteral("height")))
+              h = svgSize.value(QStringLiteral("height")).toInt();
+          }
           QVariantMap img;
           img[QStringLiteral("src")] = imageProviderUrl(src);
-          img[QStringLiteral("alt")] = QString();
+          img[QStringLiteral("alt")] = alt;
           if (w > 0) img[QStringLiteral("width")] = w;
           if (h > 0) img[QStringLiteral("height")] = h;
           result.extractedImages.push_back(img);
@@ -347,19 +449,29 @@ std::vector<MarkdownModel::Block> MarkdownModel::parseBlocks(const QString &mark
     switch (type) {
     case CMARK_NODE_PARAGRAPH: {
       bool hasImage = false;
+      bool internalImageLinksOnly = cmark_node_first_child(node) != nullptr;
       for (auto *c = cmark_node_first_child(node); c; c = cmark_node_next(c)) {
         auto ct = cmark_node_get_type(c);
+        if (ct == CMARK_NODE_SOFTBREAK || ct == CMARK_NODE_LINEBREAK) continue;
+        if (ct == CMARK_NODE_TEXT) {
+          if (QString::fromUtf8(cmark_node_get_literal(c)).trimmed().isEmpty()) continue;
+          internalImageLinksOnly = false;
+          continue;
+        }
         if (ct == CMARK_NODE_IMAGE) {
           hasImage = true;
+          internalImageLinksOnly = false;
           break;
         }
         if (ct == CMARK_NODE_LINK) {
           auto *lc = cmark_node_first_child(c);
           if (lc && !cmark_node_next(lc) && cmark_node_get_type(lc) == CMARK_NODE_IMAGE) {
             hasImage = true;
-            break;
+            if (!QString::fromUtf8(cmark_node_get_url(c)).startsWith('#')) internalImageLinksOnly = false;
+            continue;
           }
         }
+        internalImageLinksOnly = false;
       }
 
       if (!hasImage) {
@@ -367,6 +479,26 @@ std::vector<MarkdownModel::Block> MarkdownModel::parseBlocks(const QString &mark
         data[QStringLiteral("html")] = renderInlineChildren(node, ctx);
         blocks.push_back({MdBlockType::Paragraph, data});
         break;
+      }
+
+      // Pure internal image-link rows (account jump chips) become real image
+      // blocks so TapHandler can open the fragment and scroll reliably.
+      if (internalImageLinksOnly) {
+        QVariantList images;
+        for (auto *c = cmark_node_first_child(node); c; c = cmark_node_next(c)) {
+          if (cmark_node_get_type(c) != CMARK_NODE_LINK) continue;
+          auto *lc = cmark_node_first_child(c);
+          if (!lc || cmark_node_next(lc) || cmark_node_get_type(lc) != CMARK_NODE_IMAGE) continue;
+          auto data = buildImageBlock(lc);
+          data[QStringLiteral("link")] = QString::fromUtf8(cmark_node_get_url(c));
+          images.append(data);
+        }
+        if (!images.isEmpty()) {
+          QVariantMap row;
+          row[QStringLiteral("images")] = images;
+          blocks.push_back({MdBlockType::ImageRow, row});
+          break;
+        }
       }
 
       auto flushRun = [&blocks](QString &run) {
@@ -662,6 +794,14 @@ void MarkdownModel::clear() {
 }
 
 void MarkdownModel::openLink(const QString &url) {
+  if (url.startsWith('#')) {
+    // TextEdit may leave the fragment percent-encoded or already decoded.
+    // Normalize both so plugin anchors like "claude:auth" still match.
+    auto target = QUrl::fromPercentEncoding(url.sliced(1).trimmed().toUtf8()).trimmed();
+    if (!target.isEmpty()) emit internalLinkRequested(target);
+    return;
+  }
+
   auto *appDb = ServiceRegistry::instance()->appDb();
   if (!appDb->openTarget(url)) qWarning() << "MarkdownModel: failed to open link" << url;
 }
