@@ -47,7 +47,7 @@ ColumnLayout {
 
     Text {
         visible: root.model.length === 0
-        text: "All applications"
+        text: qsTr("All applications")
         color: Theme.textMuted
         font.pointSize: Theme.smallerFontSize
         font.italic: true
@@ -75,7 +75,7 @@ ColumnLayout {
                 anchors.fill: parent
                 radius: 6
                 color: "transparent"
-                border.color: Config.withAlpha(Theme.inputBorder, Config.windowOpacity)
+                border.color: Config.withAlpha(Theme.inputBorder, Config.surfaceOpacity)
                 border.width: 1
             }
 
@@ -117,7 +117,7 @@ ColumnLayout {
     }
 
     SearchableDropdown {
-        placeholder: "+ Restrict to app…"
+        placeholder: qsTr("+ Restrict to app…")
         items: root.sections
         currentItem: null
         filled: root.filled

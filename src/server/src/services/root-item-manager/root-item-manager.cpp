@@ -14,7 +14,8 @@
 #include "vicinae.hpp"
 
 RootItemManager::RootItemManager(config::Manager &cfg, LocalStorageService &storage)
-    : m_cfg(cfg), m_storage(storage), m_visitTracker(Omnicast::dataDir() / "metadata.json") {
+    : m_cfg(cfg), m_storage(storage), m_visitTracker(Omnicast::dataDir() / "metadata.json"),
+      m_searchHistory(Omnicast::dataDir() / "search-history.json") {
   connect(&cfg, &config::Manager::configChanged, this, [this](const config::ConfigValue &next) {
     mergeConfigWithMetadata(next);
     qDebug() << "configuration changed";
@@ -65,9 +66,11 @@ bool RootItemManager::enableFallback(const EntrypointId &id) {
 
 bool RootItemManager::disableFallback(const EntrypointId &id) {
   auto fbs = m_cfg.value().fallbacks;
-  std::string const sid = id;
+  auto it = std::ranges::find(fbs, std::string{id});
 
-  fbs.erase(std::ranges::find(fbs, sid));
+  if (it == fbs.end()) return false;
+
+  fbs.erase(it);
   m_cfg.mergeWithUser({.fallbacks = fbs});
   emit fallbackDisabled(id);
   emit metadataChanged();

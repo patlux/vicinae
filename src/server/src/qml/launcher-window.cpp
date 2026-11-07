@@ -1,6 +1,11 @@
 #include "launcher-window.hpp"
+#include "launcher-window-platform.hpp"
+#ifdef Q_OS_LINUX
+#include "internal/wayland/xdg-activation.hpp"
+#endif
 #include "hud-bridge.hpp"
 #include "keybind-bridge.hpp"
+#include "keyboard-bridge.hpp"
 #include "view-utils.hpp"
 #include "action-panel-controller.hpp"
 #include "ui/image/image-renderer.hpp"
@@ -17,7 +22,6 @@
 #include "extensions/vicinae/bug-report-url.hpp"
 #include "qml/vicinae-store-view-host.hpp"
 #include "settings-controller/settings-controller.hpp"
-#include "services/keybinding/keybinding-service.hpp"
 #include "services/toast/toast-service.hpp"
 #include "config/config.hpp"
 #include "service-registry.hpp"
@@ -49,7 +53,8 @@ LauncherWindow::LauncherWindow(ApplicationContext &ctx, QObject *parent)
       m_footerPanel(new ActionPanelController(ctx, this)),
       m_alertModel(new AlertModel(*ctx.navigation, this)), m_configBridge(new ConfigBridge(this)),
       m_imgSource(new ImageSource(this)), m_keybindProxy(new KeybindBridge(this)),
-      m_platformBridge(new PlatformBridge(this)), m_themeBridge(new ThemeBridge(this)) {
+      m_keyboardBridge(new KeyboardBridge(this)), m_platformBridge(new PlatformBridge(this)),
+      m_themeBridge(new ThemeBridge(this)) {
 
 #ifndef Q_OS_MACOS
   // Ensure Wayland app_id / X11 WM_CLASS is "vicinae"
@@ -69,14 +74,17 @@ LauncherWindow::LauncherWindow(ApplicationContext &ctx, QObject *parent)
   rootCtx->setContextProperty(QStringLiteral("actionPanel"), m_actionPanel);
   rootCtx->setContextProperty(QStringLiteral("footerPanel"), m_footerPanel);
   rootCtx->setContextProperty(QStringLiteral("Keybinds"), m_keybindProxy);
+  rootCtx->setContextProperty(QStringLiteral("Keyboard"), m_keyboardBridge);
   rootCtx->setContextProperty(QStringLiteral("FileChooser"), ctx.services->fileChooserService());
 
   updateLayerShellProps();
   buildFooterMenu();
 
   m_engine.load(QUrl(
-#ifdef Q_OS_MACOS
+#if defined(Q_OS_MACOS)
       QStringLiteral("qrc:/Vicinae/LauncherWindowMacOS.qml")
+#elif defined(Q_OS_WIN)
+      QStringLiteral("qrc:/Vicinae/LauncherWindowWindows.qml")
 #else
       isLayerShellActive() ? QStringLiteral("qrc:/Vicinae/LauncherWindowLayerShell.qml")
                            : QStringLiteral("qrc:/Vicinae/LauncherWindow.qml")
@@ -92,8 +100,10 @@ LauncherWindow::LauncherWindow(ApplicationContext &ctx, QObject *parent)
     m_hudBridge = new HudBridge(this);
     rootCtx->setContextProperty(QStringLiteral("hud"), m_hudBridge);
     m_engine.load(QUrl(
-#ifdef Q_OS_MACOS
+#if defined(Q_OS_MACOS)
         QStringLiteral("qrc:/Vicinae/HudWindowMacOS.qml")
+#elif defined(Q_OS_WIN)
+        QStringLiteral("qrc:/Vicinae/HudWindowWindows.qml")
 #else
         QStringLiteral("qrc:/Vicinae/HudWindowLayerShell.qml")
 #endif
@@ -104,6 +114,7 @@ LauncherWindow::LauncherWindow(ApplicationContext &ctx, QObject *parent)
 
   // Track window activation so toggleWindow() and closeOnFocusLoss work correctly
   if (m_window) {
+    nav->setWindow(m_window);
     connect(m_window, &QQuickWindow::activeChanged, this,
             [this]() { m_ctx.navigation->setWindowActivated(m_window->isActive()); });
     m_window->installEventFilter(this);
@@ -275,6 +286,7 @@ LauncherWindow::LauncherWindow(ApplicationContext &ctx, QObject *parent)
     m_toastTitle = t->title();
     m_toastMessage = t->message();
     m_toastStyle = static_cast<int>(t->priority());
+    tryCompaction(); // we don't want to compact if there is a toast to show
     emit toastChanged();
     emit toastActiveChanged();
   });
@@ -341,6 +353,14 @@ bool LauncherWindow::eventFilter(QObject *obj, QEvent *event) {
     if (ke->modifiers().testFlag(Qt::KeypadModifier)) {
       ke->setModifiers(ke->modifiers() & ~Qt::KeypadModifier);
     }
+    // the current view host gets first pick at any key press, unless a component
+    // that owns the keyboard (overlay, alert, action panel) is up.
+    const bool viewOwnsInput =
+        !m_hasOverlay && !m_alertModel->visible() && !m_actionPanel->isOpen() && !m_footerPanel->isOpen();
+    if (viewOwnsInput) {
+      auto *host = dynamic_cast<ViewHostBase *>(m_commandViewHost);
+      if (host && host->inputFilter(ke)) return true;
+    }
     // unmodified keys (return included) belong to the focused component: forwarding
     // them globally would steal text input or returns meant for local widgets such as
     // text areas, overlays or the opened action panel.
@@ -369,8 +389,14 @@ void LauncherWindow::handleVisibilityChanged(bool visible) {
     tryCompaction();
     m_window->show();
     m_window->raise();
+    LauncherWindowPlatform::grantForeground();
     m_window->requestActivate();
+#ifdef Q_OS_LINUX
+    // layer-shell has its own focus mechanism, we don't need a token
+    if (!isLayerShellActive()) { Wayland::XdgActivation::activateWindow(m_window); }
+#endif
   } else {
+    LauncherWindowPlatform::suppressHeldKeyReleases();
     m_window->hide();
     m_cacheEvictionTimer.start();
   }
@@ -516,10 +542,6 @@ void LauncherWindow::popToRoot() {
 
 bool LauncherWindow::popOnBackspace() { return m_ctx.services->config()->value().popOnBackspace; }
 
-int LauncherWindow::matchNavigationKey(int key, int modifiers) {
-  return KeyBindingService::matchNavigation(key, modifiers, m_ctx.services->config()->value().keybinding);
-}
-
 void LauncherWindow::setCompleterValue(int index, const QString &value) {
   auto *nav = m_ctx.navigation.get();
   auto values = nav->completionValues();
@@ -552,35 +574,35 @@ void LauncherWindow::buildFooterMenu() {
   state->setId(QStringLiteral("footer-menu"));
 
   auto *appSection = state->createSection();
-  appSection->addAction(new StaticAction(QStringLiteral("Open Settings"), ImageURL::builtin("cog"),
-                                         [](ApplicationContext *ctx) {
-                                           ctx->navigation->closeWindow();
-                                           ctx->settings->openWindow();
-                                         }));
-  appSection->addAction(new StaticAction(QStringLiteral("Keyboard Shortcuts"), ImageURL::builtin("keyboard"),
+  appSection->addAction(
+      new StaticAction(tr("Open Settings"), ImageURL::builtin(BuiltinIcon::Cog), [](ApplicationContext *ctx) {
+        ctx->navigation->closeWindow();
+        ctx->settings->openWindow();
+      }));
+  appSection->addAction(new StaticAction(tr("Keyboard Shortcuts"), ImageURL::builtin(BuiltinIcon::Keyboard),
                                          [](ApplicationContext *ctx) {
                                            ctx->navigation->closeWindow();
                                            ctx->settings->openTab(QStringLiteral("shortcuts"));
                                          }));
-  appSection->addAction(new StaticAction(QStringLiteral("Extension Store"), ImageURL::builtin("cart"),
-                                         [](ApplicationContext *ctx) {
+  appSection->addAction(new StaticAction(QStringLiteral("Extension Store"),
+                                         ImageURL::builtin(BuiltinIcon::Cart), [](ApplicationContext *ctx) {
                                            ctx->navigation->popToRoot();
                                            ctx->navigation->clearSearchText();
                                            ctx->navigation->pushView(new VicinaeStoreViewHost);
                                          }));
 
   auto *helpSection = state->createSection();
-  helpSection->addAction(new StaticAction(QStringLiteral("Documentation"), ImageURL::builtin("book"),
+  helpSection->addAction(new StaticAction(tr("Documentation"), ImageURL::builtin(BuiltinIcon::Book),
                                           [](ApplicationContext *ctx) {
                                             ctx->services->appDb()->openTarget(Omnicast::DOC_URL);
-                                            ctx->navigation->showHud(QStringLiteral("Opened in browser"));
+                                            ctx->navigation->showHud(tr("Opened in browser"));
                                           }));
   helpSection->addAction(
-      new StaticAction(QStringLiteral("Report a Bug"), ImageURL::builtin("bug"), [](ApplicationContext *ctx) {
+      new StaticAction(tr("Report a Bug"), ImageURL::builtin(BuiltinIcon::Bug), [](ApplicationContext *ctx) {
         ctx->services->appDb()->openTarget(makeVicinaeBugReportUrl());
-        ctx->navigation->showHud(QStringLiteral("Opened in browser"));
+        ctx->navigation->showHud(tr("Opened in browser"));
       }));
-  helpSection->addAction(new StaticAction(QStringLiteral("About Vicinae"), ImageURL::builtin("info-01"),
+  helpSection->addAction(new StaticAction(tr("About Vicinae"), ImageURL::builtin(BuiltinIcon::Info01),
                                           [](ApplicationContext *ctx) {
                                             ctx->navigation->closeWindow();
                                             ctx->settings->openTab(QStringLiteral("about"));
@@ -599,8 +621,10 @@ void LauncherWindow::setCompacted(bool value) {
 
 void LauncherWindow::tryCompaction() {
   auto &cfg = m_ctx.services->config()->value().launcherWindow.compactMode;
+
   setCompacted(!m_ctx.services->newsService()->hasUnreadNews() && cfg.enabled &&
-               m_ctx.navigation->searchText().isEmpty() && m_ctx.navigation->viewStackSize() == 1);
+               m_ctx.navigation->searchText().isEmpty() && m_ctx.navigation->viewStackSize() == 1 &&
+               !m_toastActive);
 }
 
 bool LauncherWindow::isLayerShellActive() const {

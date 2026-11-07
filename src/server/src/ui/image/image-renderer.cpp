@@ -10,6 +10,9 @@
 #ifdef Q_OS_MACOS
 #include "ui/image/mac-file-icon-loader.hpp"
 #endif
+#ifdef Q_OS_WIN
+#include "ui/image/win-file-icon-loader.hpp"
+#endif
 #include <QBuffer>
 #include <QCoreApplication>
 #include <QFontMetricsF>
@@ -155,6 +158,10 @@ QImage renderFontPreview(const QString &spec, const QSize &size) {
 }
 
 QImage renderSystemIcon(const QString &name, const QSize &size) {
+#ifdef Q_OS_MACOS
+  return renderMacSymbolIcon(name, size);
+#endif
+
   // QIconLoader and QPixmap are GUI-thread only.
   // Calling it from another thread can result in the icon not being found from the very beginning or after
   // the next cache update.
@@ -191,6 +198,11 @@ QImage renderFileIcon(const QString &path, const QSize &size, const QColor &fg, 
 #ifdef Q_OS_MACOS
   if (!fg.isValid()) {
     if (QImage native = renderMacFileIcon(path, size); !native.isNull()) { return native; }
+  }
+#endif
+#ifdef Q_OS_WIN
+  if (!fg.isValid()) {
+    if (QImage native = renderWinShellIcon(path, size); !native.isNull()) { return native; }
   }
 #endif
 

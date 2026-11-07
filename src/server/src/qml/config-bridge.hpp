@@ -2,13 +2,21 @@
 #include "capabilities.hpp"
 #include "config/config.hpp"
 #include "service-registry.hpp"
+#include "services/keybinding/keybinding-service.hpp"
 #include <QColor>
 #include <QObject>
+
+#ifdef Q_OS_WIN
+#include "windows-chrome-attached.hpp"
+#endif
 
 class ConfigBridge : public QObject {
   Q_OBJECT
 
   Q_PROPERTY(qreal windowOpacity READ windowOpacity NOTIFY changed)
+  Q_PROPERTY(qreal popupOpacity READ popupOpacity NOTIFY changed)
+  Q_PROPERTY(qreal surfaceOpacity READ surfaceOpacity NOTIFY changed)
+  Q_PROPERTY(qreal popupSurfaceOpacity READ popupSurfaceOpacity NOTIFY changed)
   Q_PROPERTY(int borderWidth READ borderWidth NOTIFY changed)
   Q_PROPERTY(int borderRounding READ borderRounding NOTIFY changed)
   Q_PROPERTY(int shadowSize READ shadowSize NOTIFY changed)
@@ -24,14 +32,43 @@ signals:
   void changed();
 
 public:
-  explicit ConfigBridge(QObject *parent = nullptr) : QObject(parent) {
+  // Windows whose surfaces sit on an opaque background (settings) ignore the
+  // configured translucency.
+  enum SurfaceMode { TranslucentSurfaces, OpaqueSurfaces };
+
+  explicit ConfigBridge(QObject *parent = nullptr) : ConfigBridge(TranslucentSurfaces, parent) {}
+
+  explicit ConfigBridge(SurfaceMode mode, QObject *parent = nullptr)
+      : QObject(parent), m_opaqueSurfaces(mode == OpaqueSurfaces) {
     connect(ServiceRegistry::instance()->config(), &config::Manager::configChanged, this,
             [this] { emit changed(); });
   }
 
   qreal windowOpacity() const {
+    if (m_opaqueSurfaces) return 1.0;
     return cfg().launcherWindow.resolvedOpacity(platform::supports(platform::Capability::LiquidGlass),
                                                 platform::supports(platform::Capability::WindowMaterial));
+  }
+
+  qreal popupOpacity() const {
+    if (m_opaqueSurfaces) return 1.0;
+    return cfg().launcherWindow.resolvedPopupOpacity(
+        platform::supports(platform::Capability::LiquidGlass),
+        platform::supports(platform::Capability::WindowMaterial));
+  }
+
+  qreal surfaceOpacity() const {
+    if (m_opaqueSurfaces) return 1.0;
+    return cfg().launcherWindow.resolvedSurfaceOpacity(
+        platform::supports(platform::Capability::LiquidGlass),
+        platform::supports(platform::Capability::WindowMaterial));
+  }
+
+  qreal popupSurfaceOpacity() const {
+    if (m_opaqueSurfaces) return 1.0;
+    return cfg().launcherWindow.resolvedPopupSurfaceOpacity(
+        platform::supports(platform::Capability::LiquidGlass),
+        platform::supports(platform::Capability::WindowMaterial));
   }
 
   int borderWidth() const {
@@ -40,6 +77,11 @@ public:
   }
 
   int borderRounding() const {
+#ifdef Q_OS_WIN
+    if (!platform::supports(platform::Capability::CustomWindowRounding)) {
+      return WindowsWindowAttached::nativeCornerRadius();
+    }
+#endif
     const auto &window = cfg().launcherWindow;
     if (platform::supports(platform::Capability::ClientSideDecorations)) {
       return window.clientSideDecorations.enabled ? window.effectiveRounding() : 0;
@@ -54,7 +96,7 @@ public:
 
   int windowWidth() const { return cfg().launcherWindow.size.width; }
   int windowHeight() const { return cfg().launcherWindow.size.height; }
-  bool emacsMode() const { return cfg().keybinding == "emacs"; }
+  bool emacsMode() const { return KeyBindingService::getMode(cfg().keybinding) == KeyBindingMode::Emacs; }
   bool considerPreedit() const { return cfg().considerPreedit; }
   bool activateOnSingleClick() const { return cfg().activateOnSingleClick; }
   QString windowMaterial() const {
@@ -70,4 +112,6 @@ public:
 
 private:
   static const config::ConfigValue &cfg() { return ServiceRegistry::instance()->config()->value(); }
+
+  const bool m_opaqueSurfaces;
 };

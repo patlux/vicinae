@@ -3,10 +3,10 @@
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
 
+#include <qlogging.h>
 #include <QClipboard>
 #include <QGuiApplication>
 #include <QMimeData>
-#include <qlogging.h>
 
 #include "services/clipboard/clipboard-mime.hpp"
 
@@ -104,7 +104,9 @@ void MacosClipboardServer::poll() {
   }
 
   auto selection = Clipboard::selectionFromMimeData(QGuiApplication::clipboard()->mimeData());
+
   if (!selection) return;
+
   // The pasteboard changed while we were reading it, let the next tick handle it
   if (currentChangeCount() != cc) return;
 

@@ -27,8 +27,8 @@ QString CommandLineSection::itemTitle(int) const {
   return QString::fromStdString(query);
 }
 
-QString CommandLineSection::itemIconSource(int) const {
-  return imageSourceFor(ImageURL::builtin("terminal"));
+std::optional<ImageURL> CommandLineSection::itemIcon(int) const {
+  return ImageURL::builtin(BuiltinIcon::Terminal);
 }
 
 std::unique_ptr<ActionPanelState> CommandLineSection::actionPanel(int) const {
@@ -45,8 +45,8 @@ std::unique_ptr<ActionPanelState> CommandLineSection::actionPanel(int) const {
     auto noHold = new OpenInTerminalAction(terminal, args, {.hold = false});
     auto runRaw = new OpenRawProgramAction(args);
 
-    hold->setTitle(QString("Open in %1 (hold)").arg(terminal->displayName()));
-    noHold->setTitle(QString("Open in %1").arg(terminal->displayName()));
+    hold->setTitle(tr("Open in %1 (hold)").arg(terminal->displayName()));
+    noHold->setTitle(tr("Open in %1").arg(terminal->displayName()));
 
     std::array<AbstractAction *, 3> actions = {hold, noHold, runRaw};
 
@@ -98,8 +98,8 @@ std::unique_ptr<ActionPanelState> ProgramsSection::actionPanel(int i) const {
     auto noHold = new OpenInTerminalAction(terminal, args, {.hold = false});
     auto runRaw = new OpenRawProgramAction(args);
 
-    hold->setTitle(QString("Open in %1 (hold)").arg(terminal->displayName()));
-    noHold->setTitle(QString("Open in %1").arg(terminal->displayName()));
+    hold->setTitle(tr("Open in %1 (hold)").arg(terminal->displayName()));
+    noHold->setTitle(tr("Open in %1").arg(terminal->displayName()));
 
     std::array<AbstractAction *, 3> actions = {hold, noHold, runRaw};
 
@@ -118,8 +118,8 @@ std::unique_ptr<ActionPanelState> ProgramsSection::actionPanel(int i) const {
       sec->addAction(action);
   }
 
-  sec->addAction(
-      new CopyToClipboardAction(Clipboard::Text(QString::fromStdString(path.string())), "Copy exec path"));
+  sec->addAction(new CopyToClipboardAction(Clipboard::Text(QString::fromStdString(path.string())),
+                                           tr("Copy exec path")));
 
   return panel;
 }

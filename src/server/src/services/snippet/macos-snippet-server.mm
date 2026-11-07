@@ -1,10 +1,10 @@
 #include "macos-snippet-server.hpp"
 #include <ApplicationServices/ApplicationServices.h>
+#include <unistd.h>
 #include <QString>
 #include <QTimer>
 #include <cctype>
 #include <ranges>
-#include <unistd.h>
 
 namespace {
 
@@ -42,7 +42,8 @@ void injectText(std::string_view text, int delayUs) {
 
   for (int off = 0; off < total;) {
     int count = total - off < CHUNK ? total - off : CHUNK;
-    // never end a chunk on a high surrogate whose low half follows, or we split the code point in two
+    // never end a chunk on a high surrogate whose low half follows, or we split the code point
+    // in two
     if (off + count < total && QChar::isHighSurrogate(units[off + count - 1])) { --count; }
 
     for (const bool down : {true, false}) {
@@ -85,11 +86,36 @@ CGEventRef tapCallback(CGEventTapProxy, CGEventType type, CGEventRef event, void
 } // namespace
 
 MacosSnippetServer::MacosSnippetServer() {
-  // we run a separate event loop for the tap instead of using the QT event loop directly
-  // because macOS can disable the tap if our main thread times out, which would force us to
-  // handle retrying and all that annoying stuff.
-  m_thread = std::thread([this]() { runTap(); });
+  startTapThread();
+
+  if (!AXIsProcessTrusted()) {
+    m_permissionRetryTimer.setInterval(2000);
+    connect(&m_permissionRetryTimer, &QTimer::timeout, this, [this]() {
+      if (!AXIsProcessTrusted()) return;
+      m_permissionRetryTimer.stop();
+      ensureTapRunning();
+    });
+    m_permissionRetryTimer.start();
+  }
+
   QTimer::singleShot(0, this, [this]() { emit ready(); });
+}
+
+// we run a separate event loop for the tap instead of using the QT event loop directly
+// because macOS can disable the tap if our main thread times out, which would force us to
+// handle retrying and all that annoying stuff.
+void MacosSnippetServer::startTapThread() {
+  m_tapThreadDone = false;
+  m_thread = std::thread([this]() {
+    runTap();
+    m_tapThreadDone = true;
+  });
+}
+
+void MacosSnippetServer::ensureTapRunning() {
+  if (!m_tapThreadDone) return;
+  if (m_thread.joinable()) m_thread.join();
+  startTapThread();
 }
 
 MacosSnippetServer::~MacosSnippetServer() {
@@ -155,9 +181,9 @@ void MacosSnippetServer::injectExpand(const std::string &text, unsigned charsToD
                                       unsigned cursorLeftMoves) {
   const int delay = m_keyDelayUs.load();
 
-  // delete the trigger with backspaces, then type the expansion as unicode key events. typing avoids
-  // the clipboard entirely and behaves consistently across terminals and editors (unlike paste +
-  // shift-select, which breaks in terminals)
+  // delete the trigger with backspaces, then type the expansion as unicode key events. typing
+  // avoids the clipboard entirely and behaves consistently across terminals and editors (unlike
+  // paste + shift-select, which breaks in terminals)
   for (unsigned i = 0; i < charsToDelete; ++i) {
     postKey(VK_DELETE, true, 0, 0);
     postKey(VK_DELETE, false, 0, delay);

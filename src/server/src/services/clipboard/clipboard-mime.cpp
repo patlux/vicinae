@@ -1,7 +1,10 @@
+#include <QImage>
 #include "clipboard-mime.hpp"
 #include <QUrl>
+#include <QBuffer>
 #include <qlogging.h>
 #include <ranges>
+#include <concepts>
 
 static bool isLegacyContentType(const QString &str) {
   if (str.startsWith("-x") || str.startsWith("-X")) return false;
@@ -9,6 +12,30 @@ static bool isLegacyContentType(const QString &str) {
 }
 
 namespace Clipboard {
+
+std::unique_ptr<QMimeData> mimeDataForContent(const Content &content) {
+  return std::visit(
+      [](const auto &value) -> std::unique_ptr<QMimeData> {
+        using T = std::decay_t<decltype(value)>;
+        auto data = std::make_unique<QMimeData>();
+
+        if constexpr (std::same_as<T, Text>) {
+          data->setText(value.text);
+        } else if constexpr (std::same_as<T, Html>) {
+          data->setHtml(value.html);
+          if (value.text) data->setText(*value.text);
+        } else if constexpr (std::same_as<T, File>) {
+          data->setUrls({QUrl::fromLocalFile(QString::fromStdString(value.path.string()))});
+        } else if constexpr (std::same_as<T, Urls>) {
+          data->setUrls(QList<QUrl>(value.values.begin(), value.values.end()));
+        } else {
+          return nullptr;
+        }
+
+        return data;
+      },
+      content);
+}
 
 std::optional<ClipboardSelection> selectionFromMimeData(const QMimeData *mimeData) {
   if (!mimeData) return std::nullopt;
@@ -46,8 +73,17 @@ std::optional<ClipboardSelection> selectionFromMimeData(const QMimeData *mimeDat
       }
     }
 
-    if (!selectedFormat.isEmpty()) {
-      ClipboardDataOffer offer;
+    ClipboardDataOffer offer;
+
+    if (selectedFormat.isEmpty()) {
+      auto image = qvariant_cast<QImage>(mimeData->imageData());
+      if (!image.isNull()) {
+        QBuffer buf(&offer.data);
+        image.save(&buf, "PNG");
+        offer.mimeType = "image/png";
+        selection.offers.emplace_back(offer);
+      }
+    } else {
       offer.mimeType = selectedFormat;
       offer.data = mimeData->data(selectedFormat);
       selection.offers.emplace_back(offer);
@@ -68,15 +104,21 @@ std::optional<ClipboardSelection> selectionFromMimeData(const QMimeData *mimeDat
     ClipboardDataOffer offer;
     offer.mimeType = "text/uri-list";
     for (const auto &url : mimeData->urls()) {
-      if (!offer.data.isEmpty()) { offer.data += ';'; }
+      if (!offer.data.isEmpty()) { offer.data += "\r\n"; }
       offer.data += url.toString().toUtf8();
     }
-    selection.offers.emplace_back(offer);
+    selection.offers.emplace_back(std::move(offer));
   }
 
   // We also want to index other formats that are not text, image, or legacy X11 target types.
 
   auto isIndexableFormat = [](const QString &fmt) {
+#ifdef Q_OS_WIN
+    // Unmapped native formats; reading one forces delayed rendering in the source app
+    if (fmt.startsWith(Clipboard::WIN_NATIVE_MIME_PREFIX)) return false;
+#endif
+    // Qt-internal synthetic format
+    if (fmt == "application/x-qt-image") return false;
     return !isLegacyContentType(fmt) && !fmt.startsWith("text/") && !fmt.startsWith("image/") &&
            fmt != Clipboard::PASSWORD_HINT_MIME_TYPE;
   };

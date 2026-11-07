@@ -4,6 +4,7 @@ import QtQuick.Layouts
 
 ViciPopover {
     id: root
+    surface: "dialog"
     x: Math.round((parent.width - width) / 2)
     y: Math.round((parent.height - height) / 2)
     width: 400
@@ -11,7 +12,6 @@ ViciPopover {
     padding: 20
     focus: true
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-    backgroundOpacity: 1
 
     property bool _confirmed: false
     property Item _focusedButton: null
@@ -81,7 +81,7 @@ ViciPopover {
                 onClicked: root.close()
                 Keys.onRightPressed: confirmBtn.forceActiveFocus()
                 Keys.onPressed: event => {
-                    const nav = launcher.matchNavigationKey(event.key, event.modifiers);
+                    const nav = Keyboard.matchNavigation(event.key, event.modifiers);
                     if (nav === 4) {
                         confirmBtn.forceActiveFocus();
                         event.accepted = true;
@@ -109,7 +109,7 @@ ViciPopover {
                 }
                 Keys.onLeftPressed: cancelBtn.forceActiveFocus()
                 Keys.onPressed: event => {
-                    const nav = launcher.matchNavigationKey(event.key, event.modifiers);
+                    const nav = Keyboard.matchNavigation(event.key, event.modifiers);
                     if (nav === 3) {
                         cancelBtn.forceActiveFocus();
                         event.accepted = true;
